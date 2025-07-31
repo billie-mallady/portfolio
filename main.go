@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -88,8 +91,137 @@ type Resume struct {
 }
 
 type APIHandler struct {
-	service    *PortfolioService
-	llmService *LLMService
+	service     *PortfolioService
+	llmService  *LLMService
+	rateLimiter *RateLimiter
+}
+
+// Rate limiting structures
+type RateLimiter struct {
+	clients map[string]*ClientLimiter
+	mutex   sync.RWMutex
+}
+
+type ClientLimiter struct {
+	requests  []time.Time
+	lastReset time.Time
+}
+
+// NewRateLimiter creates a new rate limiter
+func NewRateLimiter() *RateLimiter {
+	return &RateLimiter{
+		clients: make(map[string]*ClientLimiter),
+	}
+}
+
+// IsAllowed checks if a client is allowed to make a request
+func (rl *RateLimiter) IsAllowed(clientIP string) bool {
+	rl.mutex.Lock()
+	defer rl.mutex.Unlock()
+
+	now := time.Now()
+
+	// Get or create client limiter
+	client, exists := rl.clients[clientIP]
+	if !exists {
+		client = &ClientLimiter{
+			requests:  []time.Time{},
+			lastReset: now,
+		}
+		rl.clients[clientIP] = client
+	}
+
+	// Clean old requests (older than 5 minutes)
+	fiveMinutesAgo := now.Add(-5 * time.Minute)
+	oneMinuteAgo := now.Add(-1 * time.Minute)
+
+	// Filter out old requests
+	validRequests := []time.Time{}
+	for _, reqTime := range client.requests {
+		if reqTime.After(fiveMinutesAgo) {
+			validRequests = append(validRequests, reqTime)
+		}
+	}
+	client.requests = validRequests
+
+	// Count recent requests
+	recentRequests := 0
+	for _, reqTime := range client.requests {
+		if reqTime.After(oneMinuteAgo) {
+			recentRequests++
+		}
+	}
+
+	// Rate limits: 3 per minute, 10 per 5 minutes
+	if recentRequests >= 3 || len(client.requests) >= 10 {
+		return false
+	}
+
+	// Add current request
+	client.requests = append(client.requests, now)
+	return true
+}
+
+// Clean up old client records periodically
+func (rl *RateLimiter) Cleanup() {
+	rl.mutex.Lock()
+	defer rl.mutex.Unlock()
+
+	now := time.Now()
+	fiveMinutesAgo := now.Add(-5 * time.Minute)
+
+	for ip, client := range rl.clients {
+		if client.lastReset.Before(fiveMinutesAgo) && len(client.requests) == 0 {
+			delete(rl.clients, ip)
+		}
+	}
+}
+
+// Input validation
+func validateChatbotInput(input string) error {
+	// Length check
+	if len(input) > 500 {
+		return fmt.Errorf("input too long (max 500 characters)")
+	}
+
+	if len(strings.TrimSpace(input)) == 0 {
+		return fmt.Errorf("input cannot be empty")
+	}
+
+	// Check for suspicious patterns
+	suspiciousPatterns := []*regexp.Regexp{
+		regexp.MustCompile(`(.)\1{10,}`), // Repeated characters
+		regexp.MustCompile(`(?i)(hack|exploit|attack|inject|<script|javascript:|data:|vbscript:)`), // Common attack terms
+	}
+
+	for _, pattern := range suspiciousPatterns {
+		if pattern.MatchString(input) {
+			return fmt.Errorf("invalid input detected")
+		}
+	}
+
+	return nil
+}
+
+// Get client IP address
+func getClientIP(r *http.Request) string {
+	// Check X-Forwarded-For header
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		return strings.TrimSpace(parts[0])
+	}
+
+	// Check X-Real-IP header
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+
+	// Fall back to remote address
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
 }
 
 // Database connection
@@ -191,15 +323,6 @@ func (ps *PortfolioService) GetAuthorByID(ctx context.Context, id primitive.Obje
 	return &author, nil
 }
 
-func (ps *PortfolioService) CreateAuthor(ctx context.Context, author Author) (*Author, error) {
-	result, err := ps.authors.InsertOne(ctx, author)
-	if err != nil {
-		return nil, err
-	}
-	author.ID = result.InsertedID.(primitive.ObjectID)
-	return &author, nil
-}
-
 func (ps *PortfolioService) CountAuthors(ctx context.Context) (int64, error) {
 	return ps.authors.CountDocuments(ctx, bson.M{})
 }
@@ -271,15 +394,6 @@ func (ps *PortfolioService) GetProjectsByTechnology(ctx context.Context, technol
 	return projects, nil
 }
 
-func (ps *PortfolioService) CreateProject(ctx context.Context, project Project) (*Project, error) {
-	result, err := ps.projects.InsertOne(ctx, project)
-	if err != nil {
-		return nil, err
-	}
-	project.ID = result.InsertedID.(primitive.ObjectID)
-	return &project, nil
-}
-
 func (ps *PortfolioService) CountProjects(ctx context.Context) (int64, error) {
 	return ps.projects.CountDocuments(ctx, bson.M{})
 }
@@ -341,15 +455,6 @@ func (ps *PortfolioService) GetEducationByStudent(ctx context.Context, studentID
 	return education, nil
 }
 
-func (ps *PortfolioService) CreateEducation(ctx context.Context, education Education) (*Education, error) {
-	result, err := ps.education.InsertOne(ctx, education)
-	if err != nil {
-		return nil, err
-	}
-	education.ID = result.InsertedID.(primitive.ObjectID)
-	return &education, nil
-}
-
 func (ps *PortfolioService) CountEducation(ctx context.Context) (int64, error) {
 	return ps.education.CountDocuments(ctx, bson.M{})
 }
@@ -393,15 +498,6 @@ func (ps *PortfolioService) GetResumesBySkill(ctx context.Context, skill string)
 	return resumes, nil
 }
 
-func (ps *PortfolioService) CreateResume(ctx context.Context, resume Resume) (*Resume, error) {
-	result, err := ps.resumes.InsertOne(ctx, resume)
-	if err != nil {
-		return nil, err
-	}
-	resume.ID = result.InsertedID.(primitive.ObjectID)
-	return &resume, nil
-}
-
 func (ps *PortfolioService) CountResumes(ctx context.Context) (int64, error) {
 	return ps.resumes.CountDocuments(ctx, bson.M{})
 }
@@ -409,63 +505,6 @@ func (ps *PortfolioService) CountResumes(ctx context.Context) (int64, error) {
 // Generic search method for LLM integration
 func (ps *PortfolioService) SearchAll(ctx context.Context, query string) (map[string]interface{}, error) {
 	results := make(map[string]interface{})
-
-	// For broad queries, get all data. For specific queries, do targeted search
-	/* isSpecificQuery := strings.Contains(strings.ToLower(query), "react") ||
-		strings.Contains(strings.ToLower(query), "go") ||
-		strings.Contains(strings.ToLower(query), "python") ||
-		strings.Contains(strings.ToLower(query), "azure") ||
-		strings.Contains(strings.ToLower(query), "salesforce") ||
-		strings.Contains(strings.ToLower(query), "project") ||
-		strings.Contains(strings.ToLower(query), "university") ||
-		strings.Contains(strings.ToLower(query), "company")
-
-	var authorFilter, projectFilter, educationFilter, resumeFilter bson.M
-
-	if isSpecificQuery {
-		// Use targeted search for specific terms
-		authorFilter = bson.M{
-			"$or": []bson.M{
-				{"name": bson.M{"$regex": query, "$options": "i"}},
-				{"job_title": bson.M{"$regex": query, "$options": "i"}},
-				{"email": bson.M{"$regex": query, "$options": "i"}},
-				{"linkedin_url": bson.M{"$regex": query, "$options": "i"}},
-				{"github_url": bson.M{"$regex": query, "$options": "i"}},
-				{"hobbies": bson.M{"$regex": query, "$options": "i"}},
-			},
-		}
-		projectFilter = bson.M{
-			"$or": []bson.M{
-				{"name": bson.M{"$regex": query, "$options": "i"}},
-				{"category": bson.M{"$regex": query, "$options": "i"}},
-				{"description": bson.M{"$regex": query, "$options": "i"}},
-				{"technologies_used": bson.M{"$regex": query, "$options": "i"}},
-			},
-		}
-		educationFilter = bson.M{
-			"$or": []bson.M{
-				{"student_name": bson.M{"$regex": query, "$options": "i"}},
-				{"university_name": bson.M{"$regex": query, "$options": "i"}},
-				{"major": bson.M{"$regex": query, "$options": "i"}},
-				{"description": bson.M{"$regex": query, "$options": "i"}},
-			},
-		}
-		resumeFilter = bson.M{
-			"$or": []bson.M{
-				{"author_name": bson.M{"$regex": query, "$options": "i"}},
-				{"skills": bson.M{"$regex": query, "$options": "i"}},
-				{"experience.company": bson.M{"$regex": query, "$options": "i"}},
-				{"experience.job_title": bson.M{"$regex": query, "$options": "i"}},
-			},
-		}
-	} else {
-		// For general queries, get all data
-		authorFilter = bson.M{}
-		projectFilter = bson.M{}
-		educationFilter = bson.M{}
-		resumeFilter = bson.M{}
-	}
-	*/
 
 	var authorFilter, projectFilter, educationFilter, resumeFilter bson.M
 
@@ -642,8 +681,9 @@ func (l *LLMService) ProcessQuery(ctx context.Context, query string) (string, er
 
 func NewAPIHandler(service *PortfolioService, llmService *LLMService) *APIHandler {
 	return &APIHandler{
-		service:    service,
-		llmService: llmService,
+		service:     service,
+		llmService:  llmService,
+		rateLimiter: NewRateLimiter(),
 	}
 }
 
@@ -1022,6 +1062,14 @@ func (h *APIHandler) handleChatbot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get client IP and check rate limiting
+	clientIP := getClientIP(r)
+	if !h.rateLimiter.IsAllowed(clientIP) {
+		log.Printf("Rate limit exceeded for IP: %s", clientIP)
+		http.Error(w, "Rate limit exceeded. Please wait before making another request.", http.StatusTooManyRequests)
+		return
+	}
+
 	var request struct {
 		Query string `json:"query"`
 	}
@@ -1032,12 +1080,14 @@ func (h *APIHandler) handleChatbot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.TrimSpace(request.Query) == "" {
-		http.Error(w, "Query cannot be empty", http.StatusBadRequest)
+	// Validate input
+	if err := validateChatbotInput(request.Query); err != nil {
+		log.Printf("Invalid chatbot input from %s: %v", clientIP, err)
+		http.Error(w, fmt.Sprintf("Invalid input: %v", err), http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("Chatbot request received: %s", request.Query)
+	log.Printf("Chatbot request received from %s: %s", clientIP, request.Query)
 
 	if h.llmService == nil {
 		log.Printf("LLM service is nil, chatbot disabled")
@@ -1089,6 +1139,15 @@ func main() {
 
 	// Create API handler
 	handler := NewAPIHandler(service, llmService)
+
+	// Start rate limiter cleanup goroutine
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			handler.rateLimiter.Cleanup()
+		}
+	}()
 
 	// Setup routes
 	http.HandleFunc("/api/authors", handler.handleAuthors)

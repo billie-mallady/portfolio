@@ -6,25 +6,39 @@ const App = () => {
   const [currentInput, setCurrentInput] = useState('');
   const [commandHistory, setCommandHistory] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  const [inputDisabled, setInputDisabled] = useState(false);
   const inputRef = useRef(null);
   const terminalBodyRef = useRef(null);
+  
+  // Rate limiting for chatbot
+  const [chatbotRequests, setChatbotRequests] = useState([]);
+  const [isRateLimited, setIsRateLimited] = useState(false);
 
-const welcomeMessage = `
-██████╗ ██╗██╗     ██╗     ██╗███████╗██████╗  ██████╗ ████████╗
-██╔══██╗██║██║     ██║     ██║██╔════╝██╔══██╗██╔═══██╗╚══██╔══╝
-██████╔╝██║██║     ██║     ██║█████╗  ██████╔╝██║   ██║   ██║
-██╔══██╗██║██║     ██║     ██║██╔══╝  ██╔══██╗██║   ██║   ██║
-██████╔╝██║███████╗███████╗██║███████╗██████╔╝╚██████╔╝   ██║
-╚═════╝ ╚═╝╚══════╝╚══════╝╚═╝╚══════╝╚═════╝  ╚═════╝    ╚═╝   
-
-Welcome to Billie Bot Terminal v1.0
-Type 'help' to see available commands.
-Use command 'botchat' to ask the terminal questions and get a response in plain language...
-`;
+const welcomeMessage = (
+  <div>
+    <pre style={{margin: 0}}>
+      <span style={{color: '#F5A9B8'}}>
+        ██████╗ ██╗██╗     ██╗     ██╗███████╗</span><span style={{color: '#5BCEFA'}}>██████╗  ██████╗ ████████╗{'\n'}</span>
+      <span style={{color: '#F5A9B8'}}>
+        ██╔══██╗██║██║     ██║     ██║██╔════╝</span><span style={{color: '#5BCEFA'}}>██╔══██╗██╔═══██╗╚══██╔══╝{'\n'}</span>
+      <span style={{color: '#F5A9B8'}}>
+        ██████╔╝██║██║     ██║     ██║█████╗  </span><span style={{color: '#5BCEFA'}}>██████╔╝██║   ██║   ██║   {'\n'}</span>
+      <span style={{color: '#F5A9B8'}}>
+        ██╔══██╗██║██║     ██║     ██║██╔══╝  </span><span style={{color: '#5BCEFA'}}>██╔══██╗██║   ██║   ██║   {'\n'}</span>
+      <span style={{color: '#F5A9B8'}}>
+        ██████╔╝██║███████╗███████╗██║███████╗</span><span style={{color: '#5BCEFA'}}>██████╔╝╚██████╔╝   ██║   {'\n'}</span>
+      <span style={{color: '#F5A9B8'}}>
+        ╚═════╝ ╚═╝╚══════╝╚══════╝╚═╝╚══════╝</span><span style={{color: '#5BCEFA'}}>╚═════╝  ╚═════╝    ╚═╝   {'\n'}</span>
+    </pre>
+    <div style={{color: '#FFFFFF', marginTop: '10px'}}>
+      Welcome to Billie Bot Terminal v1.0{'\n'}
+      Type <span style={{color: '#5BCEFA'}}>'help'</span> to see available commands.{'\n'}
+      Use command <span style={{color: '#F5A9B8'}}>'chatbot'</span> to ask the terminal questions in plain language...
+    </div>
+  </div>
+);
 
   useEffect(() => {
-    setHistory([{ type: 'output', content: welcomeMessage }]);
+    setHistory([{ type: 'output', content: welcomeMessage, isComponent: true }]);
     if (inputRef.current) {
       inputRef.current.focus();
     }
@@ -35,6 +49,60 @@ Use command 'botchat' to ask the terminal questions and get a response in plain 
       terminalBodyRef.current.scrollTop = terminalBodyRef.current.scrollHeight;
     }
   }, [history]);
+
+  // Rate limiting function
+  // Allows max 10 requests in 5 minutes, and max 3 requests in 1 minute
+
+  const checkRateLimit = () => {
+    const now = Date.now();
+    const fiveMinutesAgo = now - 5 * 60 * 1000; // 5 minutes
+    const oneMinuteAgo = now - 60 * 1000; // 1 minute
+    
+    // Clean old requests
+    const recentRequests = chatbotRequests.filter(timestamp => timestamp > fiveMinutesAgo);
+    setChatbotRequests(recentRequests);
+    
+    // Check limits: max 10 requests per 5 minutes, max 3 per minute
+    const requestsInLastMinute = recentRequests.filter(timestamp => timestamp > oneMinuteAgo);
+    
+    if (recentRequests.length >= 10) {
+      setIsRateLimited(true);
+      setTimeout(() => setIsRateLimited(false), 60000); // Cool down for 1 minute
+      return false;
+    }
+    
+    if (requestsInLastMinute.length >= 3) {
+      setIsRateLimited(true);
+      setTimeout(() => setIsRateLimited(false), 15000); // Cool down for 15 seconds
+      return false;
+    }
+    
+    return true;
+  };
+
+  // Input validation for chatbot - 
+  // prevents long char inputs and suspicious patterns
+  const validateChatbotInput = (input) => {
+    // Check length (prevent extremely long inputs)
+    if (input.length > 500) {
+      return "Question too long. Please keep it under 500 characters.";
+    }
+    
+    // Check for suspicious patterns
+    const suspiciousPatterns = [
+      /(.)\1{10,}/i, // Repeated characters
+      /[^\w\s\?\!\.\,\-\'\"]/g, // Only allow common punctuation
+      /(hack|exploit|attack|inject|sql|script)/i // Common attack terms
+    ];
+    
+    for (const pattern of suspiciousPatterns) {
+      if (pattern.test(input)) {
+        return "Invalid input detected. Please ask a normal question about the portfolio.";
+      }
+    }
+    
+    return null;
+  };
 
   const executeCommand = async (command) => {
     const trimmedCommand = command.trim();
@@ -56,7 +124,7 @@ Use command 'botchat' to ask the terminal questions and get a response in plain 
         response = 'Available commands:\n' +
           '  help                          - Show this help message\n' +
           '  chatbot <question>            - Ask BILLIEBOT a question about the portfolio\n' +
-          '  botchat <question>            - Ask the bot a question\n' +
+          '                                  (Limited: 3 requests/minute, 10 requests/5min)\n' +
           '  clear                         - Clear the terminal\n' +
           '  list <collection>             - List all documents in collection\n' +
           '  find <collection> <field> <value> - Find documents matching criteria\n' +
@@ -73,7 +141,7 @@ Use command 'botchat' to ask the terminal questions and get a response in plain 
         break;
 
       case 'clear':
-        setHistory([{ type: 'output', content: welcomeMessage }]);
+        setHistory([{ type: 'output', content: welcomeMessage, isComponent: true }]);
         return;
 
       case 'version':
@@ -116,7 +184,30 @@ Use command 'botchat' to ask the terminal questions and get a response in plain 
         if (args.length === 0) {
           response = 'Usage: chatbot <your question>\nExample: chatbot what projects use React?';
         } else {
+          // Check rate limiting
+          if (isRateLimited) {
+            response = '🚫 Rate limit exceeded. Please wait before making another chatbot request.';
+            break;
+          }
+          
           const question = args.join(' ');
+          
+          // Validate input
+          const validationError = validateChatbotInput(question);
+          if (validationError) {
+            response = `🚫 ${validationError}`;
+            break;
+          }
+          
+          // Check rate limit before proceeding
+          if (!checkRateLimit()) {
+            response = '🚫 Too many requests. Please wait before asking another question.';
+            break;
+          }
+          
+          // Add timestamp to requests
+          setChatbotRequests(prev => [...prev, Date.now()]);
+          
           response = await handleChatbotCommand(question);
         }
         break;
@@ -274,6 +365,8 @@ Use command 'botchat' to ask the terminal questions and get a response in plain 
                 <span className="terminal-command">{entry.content}</span>
               ) : entry.type === 'error' ? (
                 <span className="terminal-error">{entry.content}</span>
+              ) : entry.isComponent ? (
+                entry.content
               ) : entry.content.startsWith('🤖 BILLIEBOT:') ? (
                 <div className="chatbot-response">{entry.content}</div>
               ) : (
@@ -294,7 +387,6 @@ Use command 'botchat' to ask the terminal questions and get a response in plain 
             onKeyDown={handleKeyDown}
             className="terminal-input"
             autoFocus
-            disabled={inputDisabled}
           />
          
         </div>
