@@ -3,3 +3,6 @@
 *.mongo.*
 frontend/node_modules/
 frontend/dist/
+frontend/build/
+*.log
+.DS_Store
