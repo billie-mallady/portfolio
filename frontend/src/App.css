@@ -92,9 +92,35 @@ body {
 }
 
 /* Mobile title adjustments */
+@media (max-width: 768px) {
+  .terminal-title {
+    font-size: 12px;
+    line-height: 1.2;
+  }
+}
+
 @media (max-width: 480px) {
   .terminal-title {
     font-size: 12px;
+    line-height: 1.2;
+  }
+  
+  .terminal-title::before {
+    content: "Portfolio Terminal\A MongoDB Interface";
+    white-space: pre;
+  }
+  
+  /* Hide original text on mobile */
+  .terminal-title {
+    font-size: 0;
+  }
+  
+  .terminal-title::before {
+    font-size: 11px;
+    display: block;
+    color: #cccccc;
+    font-weight: bold;
+    font-family: 'Courier New', monospace;
   }
 }
 
@@ -127,6 +153,21 @@ body {
 .terminal-output {
   min-height: calc(100% - 40px);
   margin-bottom: 20px;
+}
+
+/* Mobile output adjustments */
+@media (max-width: 768px) {
+  .terminal-output {
+    margin-bottom: 10px;
+    min-height: calc(100% - 30px);
+  }
+}
+
+@media (max-width: 480px) {
+  .terminal-output {
+    margin-bottom: 5px;
+    min-height: calc(100% - 25px);
+  }
 }
 
 .terminal-line {
@@ -321,5 +362,20 @@ body {
   
   .terminal-input {
     min-height: 24px;
+  }
+}
+
+/* Reduce spacing between content and input on mobile */
+@media (max-width: 768px) {
+  .terminal-input-line {
+    padding: 8px 0;
+    margin-top: 5px;
+  }
+}
+
+@media (max-width: 480px) {
+  .terminal-input-line {
+    padding: 5px 0;
+    margin-top: 2px;
   }
 }
