@@ -190,8 +190,19 @@ func validateChatbotInput(input string) error {
 
 	// Check for suspicious patterns
 	suspiciousPatterns := []*regexp.Regexp{
-		regexp.MustCompile(`(.)\1{10,}`), // Repeated characters
 		regexp.MustCompile(`(?i)(hack|exploit|attack|inject|<script|javascript:|data:|vbscript:)`), // Common attack terms
+	}
+
+	// Check for repeated characters manually (since Go regexp doesn't support backreferences)
+	for i := 0; i < len(input)-10; i++ {
+		char := input[i]
+		count := 1
+		for j := i + 1; j < len(input) && input[j] == char; j++ {
+			count++
+		}
+		if count > 10 {
+			return fmt.Errorf("invalid input detected")
+		}
 	}
 
 	for _, pattern := range suspiciousPatterns {
@@ -226,6 +237,7 @@ func getClientIP(r *http.Request) string {
 
 // Database connection
 func connectToMongoDB() (*mongo.Client, error) {
+	godotenv.Load()
 	// Get MongoDB connection string from environment variable
 	mongoURI := os.Getenv("MONGODB_URI")
 	if mongoURI == "" {
@@ -506,36 +518,110 @@ func (ps *PortfolioService) CountResumes(ctx context.Context) (int64, error) {
 func (ps *PortfolioService) SearchAll(ctx context.Context, query string) (map[string]interface{}, error) {
 	results := make(map[string]interface{})
 
+	// Create search terms from the query
+	searchTerms := strings.Fields(strings.ToLower(query))
+
+	// Build regex pattern for case-insensitive search
+	searchPattern := strings.Join(searchTerms, "|")
+	regex := bson.M{"$regex": searchPattern, "$options": "i"}
+
+	// Smart filtering based on query content
 	var authorFilter, projectFilter, educationFilter, resumeFilter bson.M
 
-	authorFilter = bson.M{}
-	projectFilter = bson.M{}
-	educationFilter = bson.M{}
-	resumeFilter = bson.M{}
+	// Search authors (name, job_title, email, hobbies)
+	authorFilter = bson.M{
+		"$or": []bson.M{
+			{"name": regex},
+			{"email": regex},
+			{"phone": regex},
+			{"job_title": regex},
+			{"linkedin_url": regex},
+			{"github_url": regex},
+			{"website": regex},
+		},
+	}
+
+	// Search projects (name, category, description, technologies_used)
+	projectFilter = bson.M{
+		"$or": []bson.M{
+			{"name": regex},
+			{"category": regex},
+			{"description": regex},
+			{"technologies_used": regex},
+			{"start_date": regex}, // Assuming start_date is a string for search purposes
+			{"end_date": regex},   // Assuming end_date is a string for search purposes
+		},
+	}
+
+	educationFilter = bson.M{
+		"$or": []bson.M{
+			{"university_name": regex},
+			{"field_of_study": regex},
+			{"description": regex},
+			{"student_name": regex},
+			{"gpa": regex},
+			{"start_date": regex}, // Assuming start_date is a string for search purposes
+			{"end_date": regex},   // Assuming end_date is a string for search purposes
+		},
+	}
+
+	// Search resumes (skills, author_name, experience)
+	resumeFilter = bson.M{
+		"$or": []bson.M{
+			{"skills": regex},
+			{"author_name": regex},
+			{"experience.job_title": regex},
+			{"experience.company": regex},
+		},
+	}
+
+	// If no specific search terms, return all data (fallback for general queries)
+	if len(searchTerms) == 0 || query == "" {
+		authorFilter = bson.M{}
+		projectFilter = bson.M{}
+		educationFilter = bson.M{}
+		resumeFilter = bson.M{}
+	}
 
 	// Search authors
-	authors, _ := ps.authors.Find(ctx, authorFilter)
+	authors, err := ps.authors.Find(ctx, authorFilter)
+	if err != nil {
+		log.Printf("Error searching authors: %v", err)
+		authors, _ = ps.authors.Find(ctx, bson.M{}) // Fallback to all
+	}
 	var authorResults []Author
 	authors.All(ctx, &authorResults)
 	results["authors"] = authorResults
 	authors.Close(ctx)
 
 	// Search projects
-	projects, _ := ps.projects.Find(ctx, projectFilter)
+	projects, err := ps.projects.Find(ctx, projectFilter)
+	if err != nil {
+		log.Printf("Error searching projects: %v", err)
+		projects, _ = ps.projects.Find(ctx, bson.M{}) // Fallback to all
+	}
 	var projectResults []Project
 	projects.All(ctx, &projectResults)
 	results["projects"] = projectResults
 	projects.Close(ctx)
 
 	// Search education
-	education, _ := ps.education.Find(ctx, educationFilter)
+	education, err := ps.education.Find(ctx, educationFilter)
+	if err != nil {
+		log.Printf("Error searching education: %v", err)
+		education, _ = ps.education.Find(ctx, bson.M{}) // Fallback to all
+	}
 	var educationResults []Education
 	education.All(ctx, &educationResults)
 	results["education"] = educationResults
 	education.Close(ctx)
 
 	// Search resumes
-	resumes, _ := ps.resumes.Find(ctx, resumeFilter)
+	resumes, err := ps.resumes.Find(ctx, resumeFilter)
+	if err != nil {
+		log.Printf("Error searching resumes: %v", err)
+		resumes, _ = ps.resumes.Find(ctx, bson.M{}) // Fallback to all
+	}
 	var resumeResults []Resume
 	resumes.All(ctx, &resumeResults)
 	results["resumes"] = resumeResults
@@ -548,6 +634,7 @@ func (ps *PortfolioService) SearchAll(ctx context.Context, query string) (map[st
 type LLMService struct {
 	client           openai.Client
 	portfolioService *PortfolioService
+	model            string
 }
 
 // NewLLMService creates a new LLM service instance
@@ -557,10 +644,19 @@ func NewLLMService(apiKey string, portfolioService *PortfolioService) *LLMServic
 		return nil
 	}
 
+	// Default to cheapest model if something goes wrong. Configure the model in .env.
+	model := os.Getenv("OPENAI_MODEL")
+	if model == "" {
+		model = "gpt-3.5-turbo"
+	}
+
+	log.Printf("Initializing LLM service with model: %s", model)
+
 	client := openai.NewClient(option.WithAPIKey(apiKey))
 	return &LLMService{
 		client:           client,
 		portfolioService: portfolioService,
+		model:            model,
 	}
 }
 
@@ -581,19 +677,28 @@ func (l *LLMService) ProcessQuery(ctx context.Context, query string) (string, er
 
 	// Log what data we found
 	log.Printf("Search results for query '%s':", query)
+	totalItems := 0
 	for collection, data := range searchResults {
-		if dataSlice, ok := data.([]interface{}); ok {
-			log.Printf("  %s: %d items", collection, len(dataSlice))
-		} else if dataSlice, ok := data.([]Author); ok {
-			log.Printf("  %s: %d authors", collection, len(dataSlice))
+		var count int
+		if dataSlice, ok := data.([]Author); ok {
+			count = len(dataSlice)
+			log.Printf("  %s: %d authors", collection, count)
 		} else if dataSlice, ok := data.([]Project); ok {
-			log.Printf("  %s: %d projects", collection, len(dataSlice))
+			count = len(dataSlice)
+			log.Printf("  %s: %d projects", collection, count)
 		} else if dataSlice, ok := data.([]Education); ok {
-			log.Printf("  %s: %d education", collection, len(dataSlice))
+			count = len(dataSlice)
+			log.Printf("  %s: %d education records", collection, count)
 		} else if dataSlice, ok := data.([]Resume); ok {
-			log.Printf("  %s: %d resumes", collection, len(dataSlice))
+			count = len(dataSlice)
+			log.Printf("  %s: %d resumes", collection, count)
+		} else if dataSlice, ok := data.([]interface{}); ok {
+			count = len(dataSlice)
+			log.Printf("  %s: %d items", collection, count)
 		}
+		totalItems += count
 	}
+	log.Printf("Total relevant items found: %d", totalItems)
 
 	// Convert search results to JSON for context
 	contextData, err := json.MarshalIndent(searchResults, "", "  ")
@@ -607,14 +712,18 @@ func (l *LLMService) ProcessQuery(ctx context.Context, query string) (string, er
 	if len(contextString) > 8000 {
 		contextString = contextString[:8000] + "...[truncated]"
 		log.Printf("Context truncated to 8000 characters")
+	} else if len(contextString) < 500 {
+		log.Printf("Context is small (%d characters), sending as-is", len(contextString))
 	}
 
-	log.Printf("Context data being sent to OpenAI (first 500 chars): %s", contextString[:min(500, len(contextString))])
+	log.Printf("Context data being sent to OpenAI: %s", contextString[:min(500, len(contextString))])
 
+	// Include the current date so that the bot doesn't get confused.
+	currentDate := time.Now().Format("2006-01-02 15:04:05")
 	// Create a comprehensive prompt with portfolio context
 	prompt := fmt.Sprintf(`You are BILLIEBOT, a professional portfolio assistant for Billie Mallady, a talented Software Engineer. You have access to Billie's complete portfolio data in the form of MongoDB documents including projects, work experience, education, and skills, resume and hobbies. The following data structures apply:
 
-
+	CURRENT DATE: %s
 	AUTHORS:
 	Here you will find information about Billie Mallady, including their name, job title, email, LinkedIn URL, GitHub URL, and hobbies.
 
@@ -649,16 +758,16 @@ func (l *LLMService) ProcessQuery(ctx context.Context, query string) (string, er
 		Please provide a helpful response based on the portfolio data above.
 		Provide your response separated by newline characters where appropriate.
 
-`, contextString, query)
+`, currentDate, contextString, query)
 
-	log.Printf("Sending request to OpenAI...")
+	log.Printf("Sending request to OpenAI using model: %s", l.model)
 
 	// Send request to OpenAI using the official client (corrected syntax)
 	completion, err := l.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 		Messages: []openai.ChatCompletionMessageParamUnion{
 			openai.UserMessage(prompt),
 		},
-		Model: openai.ChatModelGPT3_5Turbo,
+		Model: l.model, // Use the configurable model
 	})
 
 	if err != nil {
@@ -696,12 +805,19 @@ func (h *APIHandler) enableCORS(w http.ResponseWriter) {
 
 // Authors endpoints
 func (h *APIHandler) handleAuthors(w http.ResponseWriter, r *http.Request) {
+	currentTime := time.Now().Format("2006-01-02 15:04:05")
+	gptModel := "DISABLED"
+	if h.llmService != nil {
+		gptModel = h.llmService.model
+	}
+
 	h.enableCORS(w)
 	if r.Method == "OPTIONS" {
 		return
 	}
 
 	if r.Method != "GET" {
+		log.Printf("Date: %s | Route: /api/authors | Status: METHOD_NOT_ALLOWED | GPT Model: %s", currentTime, gptModel)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -737,14 +853,22 @@ func (h *APIHandler) handleAuthors(w http.ResponseWriter, r *http.Request) {
 	// Get all authors
 	authors, err := h.service.GetAllAuthors(ctx)
 	if err != nil {
+		log.Printf("Date: %s | Route: /api/authors | Status: ERROR | GPT Model: %s", currentTime, gptModel)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("Date: %s | Route: /api/authors | Status: SUCCESS | GPT Model: %s", currentTime, gptModel)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(authors)
 }
 
 func (h *APIHandler) handleAuthorsCount(w http.ResponseWriter, r *http.Request) {
+	currentTime := time.Now().Format("2006-01-02 15:04:05")
+	gptModel := "DISABLED"
+	if h.llmService != nil {
+		gptModel = h.llmService.model
+	}
+
 	h.enableCORS(w)
 	if r.Method == "OPTIONS" {
 		return
@@ -753,22 +877,31 @@ func (h *APIHandler) handleAuthorsCount(w http.ResponseWriter, r *http.Request) 
 	ctx := context.Background()
 	count, err := h.service.CountAuthors(ctx)
 	if err != nil {
+		log.Printf("Date: %s | Route: /api/authors/count | Status: ERROR | GPT Model: %s", currentTime, gptModel)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	log.Printf("Date: %s | Route: /api/authors/count | Status: SUCCESS | GPT Model: %s", currentTime, gptModel)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int64{"count": count})
 }
 
 // Projects endpoints
 func (h *APIHandler) handleProjects(w http.ResponseWriter, r *http.Request) {
+	currentTime := time.Now().Format("2006-01-02 15:04:05")
+	gptModel := "DISABLED"
+	if h.llmService != nil {
+		gptModel = h.llmService.model
+	}
+
 	h.enableCORS(w)
 	if r.Method == "OPTIONS" {
 		return
 	}
 
 	if r.Method != "GET" {
+		log.Printf("Date: %s | Route: /api/projects | Status: METHOD_NOT_ALLOWED | GPT Model: %s", currentTime, gptModel)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -833,14 +966,22 @@ func (h *APIHandler) handleProjects(w http.ResponseWriter, r *http.Request) {
 	// Get all projects
 	projects, err := h.service.GetAllProjects(ctx)
 	if err != nil {
+		log.Printf("Date: %s | Route: /api/projects | Status: ERROR | GPT Model: %s", currentTime, gptModel)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("Date: %s | Route: /api/projects | Status: SUCCESS | GPT Model: %s", currentTime, gptModel)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(projects)
 }
 
 func (h *APIHandler) handleProjectsCount(w http.ResponseWriter, r *http.Request) {
+	currentTime := time.Now().Format("2006-01-02 15:04:05")
+	gptModel := "DISABLED"
+	if h.llmService != nil {
+		gptModel = h.llmService.model
+	}
+
 	h.enableCORS(w)
 	if r.Method == "OPTIONS" {
 		return
@@ -849,22 +990,31 @@ func (h *APIHandler) handleProjectsCount(w http.ResponseWriter, r *http.Request)
 	ctx := context.Background()
 	count, err := h.service.CountProjects(ctx)
 	if err != nil {
+		log.Printf("Date: %s | Route: /api/projects/count | Status: ERROR | GPT Model: %s", currentTime, gptModel)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	log.Printf("Date: %s | Route: /api/projects/count | Status: SUCCESS | GPT Model: %s", currentTime, gptModel)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int64{"count": count})
 }
 
 // Education endpoints
 func (h *APIHandler) handleEducation(w http.ResponseWriter, r *http.Request) {
+	currentTime := time.Now().Format("2006-01-02 15:04:05")
+	gptModel := "DISABLED"
+	if h.llmService != nil {
+		gptModel = h.llmService.model
+	}
+
 	h.enableCORS(w)
 	if r.Method == "OPTIONS" {
 		return
 	}
 
 	if r.Method != "GET" {
+		log.Printf("Date: %s | Route: /api/education | Status: METHOD_NOT_ALLOWED | GPT Model: %s", currentTime, gptModel)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -917,14 +1067,22 @@ func (h *APIHandler) handleEducation(w http.ResponseWriter, r *http.Request) {
 	// Get all education
 	education, err := h.service.GetAllEducation(ctx)
 	if err != nil {
+		log.Printf("Date: %s | Route: /api/education | Status: ERROR | GPT Model: %s", currentTime, gptModel)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("Date: %s | Route: /api/education | Status: SUCCESS | GPT Model: %s", currentTime, gptModel)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(education)
 }
 
 func (h *APIHandler) handleEducationCount(w http.ResponseWriter, r *http.Request) {
+	currentTime := time.Now().Format("2006-01-02 15:04:05")
+	gptModel := "DISABLED"
+	if h.llmService != nil {
+		gptModel = h.llmService.model
+	}
+
 	h.enableCORS(w)
 	if r.Method == "OPTIONS" {
 		return
@@ -933,22 +1091,31 @@ func (h *APIHandler) handleEducationCount(w http.ResponseWriter, r *http.Request
 	ctx := context.Background()
 	count, err := h.service.CountEducation(ctx)
 	if err != nil {
+		log.Printf("Date: %s | Route: /api/education/count | Status: ERROR | GPT Model: %s", currentTime, gptModel)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	log.Printf("Date: %s | Route: /api/education/count | Status: SUCCESS | GPT Model: %s", currentTime, gptModel)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int64{"count": count})
 }
 
 // Resumes endpoints
 func (h *APIHandler) handleResumes(w http.ResponseWriter, r *http.Request) {
+	currentTime := time.Now().Format("2006-01-02 15:04:05")
+	gptModel := "DISABLED"
+	if h.llmService != nil {
+		gptModel = h.llmService.model
+	}
+
 	h.enableCORS(w)
 	if r.Method == "OPTIONS" {
 		return
 	}
 
 	if r.Method != "GET" {
+		log.Printf("Date: %s | Route: /api/resumes | Status: METHOD_NOT_ALLOWED | GPT Model: %s", currentTime, gptModel)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -989,14 +1156,22 @@ func (h *APIHandler) handleResumes(w http.ResponseWriter, r *http.Request) {
 	// Get all resumes
 	resumes, err := h.service.GetAllResumes(ctx)
 	if err != nil {
+		log.Printf("Date: %s | Route: /api/resumes | Status: ERROR | GPT Model: %s", currentTime, gptModel)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Printf("Date: %s | Route: /api/resumes | Status: SUCCESS | GPT Model: %s", currentTime, gptModel)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resumes)
 }
 
 func (h *APIHandler) handleResumesCount(w http.ResponseWriter, r *http.Request) {
+	currentTime := time.Now().Format("2006-01-02 15:04:05")
+	gptModel := "DISABLED"
+	if h.llmService != nil {
+		gptModel = h.llmService.model
+	}
+
 	h.enableCORS(w)
 	if r.Method == "OPTIONS" {
 		return
@@ -1005,28 +1180,38 @@ func (h *APIHandler) handleResumesCount(w http.ResponseWriter, r *http.Request) 
 	ctx := context.Background()
 	count, err := h.service.CountResumes(ctx)
 	if err != nil {
+		log.Printf("Date: %s | Route: /api/resumes/count | Status: ERROR | GPT Model: %s", currentTime, gptModel)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	log.Printf("Date: %s | Route: /api/resumes/count | Status: SUCCESS | GPT Model: %s", currentTime, gptModel)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int64{"count": count})
 }
 
 // Search endpoint for LLM integration
 func (h *APIHandler) handleSearch(w http.ResponseWriter, r *http.Request) {
+	currentTime := time.Now().Format("2006-01-02 15:04:05")
+	gptModel := "DISABLED"
+	if h.llmService != nil {
+		gptModel = h.llmService.model
+	}
+
 	h.enableCORS(w)
 	if r.Method == "OPTIONS" {
 		return
 	}
 
 	if r.Method != "GET" {
+		log.Printf("Date: %s | Route: /api/search | Status: METHOD_NOT_ALLOWED | GPT Model: %s", currentTime, gptModel)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	query := r.URL.Query().Get("q")
 	if query == "" {
+		log.Printf("Date: %s | Route: /api/search | Status: BAD_REQUEST | GPT Model: %s", currentTime, gptModel)
 		http.Error(w, "Query parameter 'q' is required", http.StatusBadRequest)
 		return
 	}
@@ -1034,19 +1219,28 @@ func (h *APIHandler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 	results, err := h.service.SearchAll(ctx, query)
 	if err != nil {
+		log.Printf("Date: %s | Route: /api/search | Status: ERROR | GPT Model: %s", currentTime, gptModel)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	log.Printf("Date: %s | Route: /api/search | Status: SUCCESS | GPT Model: %s", currentTime, gptModel)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(results)
 }
 
 // Chatbot endpoint
 func (h *APIHandler) handleChatbot(w http.ResponseWriter, r *http.Request) {
+	currentTime := time.Now().Format("2006-01-02 15:04:05")
+	gptModel := "DISABLED"
+	if h.llmService != nil {
+		gptModel = h.llmService.model
+	}
+
 	// Add recovery to prevent server crashes
 	defer func() {
 		if r := recover(); r != nil {
+			log.Printf("Date: %s | Route: /api/chatbot | Status: PANIC | GPT Model: %s", currentTime, gptModel)
 			log.Printf("Chatbot handler panic: %v", r)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 		}
@@ -1058,6 +1252,7 @@ func (h *APIHandler) handleChatbot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != "POST" {
+		log.Printf("Date: %s | Route: /api/chatbot | Status: METHOD_NOT_ALLOWED | GPT Model: %s", currentTime, gptModel)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -1065,6 +1260,7 @@ func (h *APIHandler) handleChatbot(w http.ResponseWriter, r *http.Request) {
 	// Get client IP and check rate limiting
 	clientIP := getClientIP(r)
 	if !h.rateLimiter.IsAllowed(clientIP) {
+		log.Printf("Date: %s | Route: /api/chatbot | Status: RATE_LIMITED | GPT Model: %s", currentTime, gptModel)
 		log.Printf("Rate limit exceeded for IP: %s", clientIP)
 		http.Error(w, "Rate limit exceeded. Please wait before making another request.", http.StatusTooManyRequests)
 		return
@@ -1075,6 +1271,7 @@ func (h *APIHandler) handleChatbot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		log.Printf("Date: %s | Route: /api/chatbot | Status: BAD_REQUEST | GPT Model: %s", currentTime, gptModel)
 		log.Printf("Error decoding chatbot request: %v", err)
 		http.Error(w, "Invalid JSON request", http.StatusBadRequest)
 		return
@@ -1082,6 +1279,7 @@ func (h *APIHandler) handleChatbot(w http.ResponseWriter, r *http.Request) {
 
 	// Validate input
 	if err := validateChatbotInput(request.Query); err != nil {
+		log.Printf("Date: %s | Route: /api/chatbot | Status: INVALID_INPUT | GPT Model: %s", currentTime, gptModel)
 		log.Printf("Invalid chatbot input from %s: %v", clientIP, err)
 		http.Error(w, fmt.Sprintf("Invalid input: %v", err), http.StatusBadRequest)
 		return
@@ -1090,6 +1288,7 @@ func (h *APIHandler) handleChatbot(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Chatbot request received from %s: %s", clientIP, request.Query)
 
 	if h.llmService == nil {
+		log.Printf("Date: %s | Route: /api/chatbot | Status: LLM_DISABLED | GPT Model: %s", currentTime, gptModel)
 		log.Printf("LLM service is nil, chatbot disabled")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
@@ -1102,11 +1301,13 @@ func (h *APIHandler) handleChatbot(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 	response, err := h.llmService.ProcessQuery(ctx, request.Query)
 	if err != nil {
+		log.Printf("Date: %s | Route: /api/chatbot | Status: LLM_ERROR | GPT Model: %s", currentTime, gptModel)
 		log.Printf("Error processing chatbot query: %v", err)
 		http.Error(w, fmt.Sprintf("Chatbot error: %v", err), http.StatusInternalServerError)
 		return
 	}
 
+	log.Printf("Date: %s | Route: /api/chatbot | Status: SUCCESS | GPT Model: %s", currentTime, gptModel)
 	log.Printf("Chatbot response generated successfully")
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1119,7 +1320,7 @@ func (h *APIHandler) handleChatbot(w http.ResponseWriter, r *http.Request) {
 func main() {
 	// Load environment variables from .env file
 	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using system environment variables")
+		log.Println("Warning: Could not load .env file, using system environment variables")
 	}
 
 	// Connect to MongoDB
@@ -1167,23 +1368,17 @@ func main() {
 		port = "8080"
 	}
 
+	// Server startup log entry
+	currentTime := time.Now().Format("2006-01-02 15:04:05")
+	gptModel := "DISABLED"
+	if llmService != nil {
+		gptModel = llmService.model
+	}
+
+	log.Printf("Date: %s | Route: SERVER_START | Status: SUCCESS | GPT Model: %s",
+		currentTime, gptModel)
+
 	fmt.Printf("Portfolio API server starting on port %s\n", port)
-	fmt.Println("Available endpoints:")
-	fmt.Println("  GET  /api/authors")
-	fmt.Println("  GET  /api/authors/count")
-	fmt.Println("  GET  /api/projects")
-	fmt.Println("  GET  /api/projects/count")
-	fmt.Println("  GET  /api/education")
-	fmt.Println("  GET  /api/education/count")
-	fmt.Println("  GET  /api/resumes")
-	fmt.Println("  GET  /api/resumes/count")
-	fmt.Println("  GET  /api/search?q=<query>")
-	fmt.Println("  POST /api/chatbot (JSON: {\"query\": \"your question\"})")
-	fmt.Println("\nQuery parameters supported:")
-	fmt.Println("  Authors: ?name=<name>, ?email=<email>")
-	fmt.Println("  Projects: ?name=<name>, ?category=<category>, ?technology=<tech>, ?author_id=<id>")
-	fmt.Println("  Education: ?university=<university>, ?major=<major>, ?student_id=<id>")
-	fmt.Println("  Resumes: ?author_id=<id>, ?skill=<skill>")
 
 	if llmService != nil {
 		fmt.Println("\n🤖 Chatbot is ENABLED with OpenAI integration")
