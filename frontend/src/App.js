@@ -15,19 +15,23 @@ const App = () => {
 
 const welcomeMessage = (
   <div>
-    <pre style={{margin: 0}}>
-      <span style={{color: '#F5A9B8'}}>
-        ██████╗ ██╗██╗     ██╗     ██╗███████╗</span><span style={{color: '#5BCEFA'}}>██████╗  ██████╗ ████████╗{'\n'}</span>
-      <span style={{color: '#F5A9B8'}}>
-        ██╔══██╗██║██║     ██║     ██║██╔════╝</span><span style={{color: '#5BCEFA'}}>██╔══██╗██╔═══██╗╚══██╔══╝{'\n'}</span>
-      <span style={{color: '#F5A9B8'}}>
-        ██████╔╝██║██║     ██║     ██║█████╗  </span><span style={{color: '#5BCEFA'}}>██████╔╝██║   ██║   ██║   {'\n'}</span>
-      <span style={{color: '#F5A9B8'}}>
-        ██╔══██╗██║██║     ██║     ██║██╔══╝  </span><span style={{color: '#5BCEFA'}}>██╔══██╗██║   ██║   ██║   {'\n'}</span>
-      <span style={{color: '#F5A9B8'}}>
-        ██████╔╝██║███████╗███████╗██║███████╗</span><span style={{color: '#5BCEFA'}}>██████╔╝╚██████╔╝   ██║   {'\n'}</span>
-      <span style={{color: '#F5A9B8'}}>
-        ╚═════╝ ╚═╝╚══════╝╚══════╝╚═╝╚══════╝</span><span style={{color: '#5BCEFA'}}>╚═════╝  ╚═════╝    ╚═╝   {'\n'}</span>
+    <pre style={{margin: 0}} className="ascii-title">
+      <div className="billie-part" style={{color: '#F5A9B8'}}>
+        ██████╗ ██╗██╗     ██╗     ██╗███████╗{'\n'}
+        ██╔══██╗██║██║     ██║     ██║██╔════╝{'\n'}
+        ██████╔╝██║██║     ██║     ██║█████╗  {'\n'}
+        ██╔══██╗██║██║     ██║     ██║██╔══╝  {'\n'}
+        ██████╔╝██║███████╗███████╗██║███████╗{'\n'}
+        ╚═════╝ ╚═╝╚══════╝╚══════╝╚═╝╚══════╝
+      </div>
+      <div className="bot-part" style={{color: '#5BCEFA'}}>
+        ██████╗  ██████╗ ████████╗{'\n'}
+        ██╔══██╗██╔═══██╗╚══██╔══╝{'\n'}
+        ██████╔╝██║   ██║   ██║   {'\n'}
+        ██╔══██╗██║   ██║   ██║   {'\n'}
+        ██████╔╝╚██████╔╝   ██║   {'\n'}
+        ╚═════╝  ╚═════╝    ╚═╝   
+      </div>
     </pre>
     <div style={{color: '#FFFFFF', marginTop: '10px'}}>
       Welcome to Billie Bot Terminal v1.0{'\n'}
@@ -91,7 +95,7 @@ const welcomeMessage = (
     // Check for suspicious patterns
     const suspiciousPatterns = [
       /(.)\1{10,}/i, // Repeated characters
-      /[^\w\s\?\!\.\,\-\'\"]/g, // Only allow common punctuation
+      /[^\w\s?!.,'"-]/g, // Only allow common punctuation
       /(hack|exploit|attack|inject|sql|script)/i // Common attack terms
     ];
     

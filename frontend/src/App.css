@@ -27,6 +27,7 @@ body {
   padding: 20px;
   display: flex;
   flex-direction: column;
+  font-weight: bold;
 }
 
 /* Mobile responsive adjustments */
@@ -153,20 +154,23 @@ body {
 .terminal-output {
   min-height: calc(100% - 40px);
   margin-bottom: 20px;
+  padding-bottom: 10vh; /* Add padding to account for raised prompt */
 }
 
 /* Mobile output adjustments */
 @media (max-width: 768px) {
   .terminal-output {
-    margin-bottom: 10px;
-    min-height: calc(100% - 30px);
+    margin-bottom: 5px;
+    min-height: calc(100% - 25px);
+    padding-bottom: 15vh; /* More padding on mobile for raised prompt */
   }
 }
 
 @media (max-width: 480px) {
   .terminal-output {
-    margin-bottom: 5px;
-    min-height: calc(100% - 25px);
+    margin-bottom: 2px;
+    min-height: calc(100% - 20px);
+    padding-bottom: 18vh; /* Even more padding on small mobile */
   }
 }
 
@@ -204,7 +208,7 @@ body {
   display: flex;
   align-items: center;
   position: sticky;
-  bottom: 0;
+  bottom: 5%;
   background-color: #0c0c0c;
   padding: 10px 0;
 }
@@ -234,12 +238,14 @@ body {
     appearance: none;
     -webkit-border-radius: 0;
     border-radius: 0;
+    font-weight: bold;
   }
 }
 
 @media (max-width: 480px) {
   .terminal-input {
-    font-size: 14px;
+    font-size: 16px;
+    font-weight: bold;
   }
 }
 
@@ -305,23 +311,27 @@ body {
   .chatbot-response {
     margin-left: 10px;
     max-width: calc(100% - 20px);
-    font-size: 14px;
-    line-height: 1.3;
+    font-size: 16px;
+    line-height: 1.4;
+    font-weight: bold;
   }
   
   .terminal-result {
     margin-left: 10px;
-    font-size: 14px;
+    font-size: 16px;
+    font-weight: bold;
   }
   
   .terminal-error {
     margin-left: 10px;
-    font-size: 14px;
+    font-size: 16px;
+    font-weight: bold;
   }
   
   .command-description {
     margin-left: 10px;
-    font-size: 14px;
+    font-size: 16px;
+    font-weight: bold;
   }
 }
 
@@ -329,23 +339,27 @@ body {
   .chatbot-response {
     margin-left: 5px;
     max-width: calc(100% - 10px);
-    font-size: 13px;
-    line-height: 1.2;
+    font-size: 15px;
+    line-height: 1.3;
+    font-weight: bold;
   }
   
   .terminal-result {
     margin-left: 5px;
-    font-size: 13px;
+    font-size: 15px;
+    font-weight: bold;
   }
   
   .terminal-error {
     margin-left: 5px;
-    font-size: 13px;
+    font-size: 15px;
+    font-weight: bold;
   }
   
   .command-description {
     margin-left: 5px;
-    font-size: 13px;
+    font-size: 15px;
+    font-weight: bold;
   }
   
   .terminal-prompt-symbol {
@@ -368,14 +382,28 @@ body {
 /* Reduce spacing between content and input on mobile */
 @media (max-width: 768px) {
   .terminal-input-line {
-    padding: 8px 0;
-    margin-top: 5px;
+    padding: 5px 0;
+    margin-top: 2px;
   }
 }
 
 @media (max-width: 480px) {
   .terminal-input-line {
-    padding: 5px 0;
-    margin-top: 2px;
+    padding: 3px 0;
+    margin-top: 1px;
   }
+}
+
+/* ASCII Title Styling - Always two lines */
+.ascii-title {
+  margin: 0;
+}
+
+.ascii-title .billie-part {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.ascii-title .bot-part {
+  display: block;
 }
