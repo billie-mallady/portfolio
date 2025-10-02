@@ -538,6 +538,7 @@ func (ps *PortfolioService) SearchAll(ctx context.Context, query string) (map[st
 			{"linkedin_url": regex},
 			{"github_url": regex},
 			{"website": regex},
+			{"hobbies": regex},
 		},
 	}
 
